@@ -33,6 +33,7 @@ def run_sim(
     qa_renew_relative_multiplier_vec: jnp.array = 1.0,
     gamma: Union[float, jnp.array] = 1.0,
     gamma_weight_type: Union[int, jnp.array] = 0,
+    burn_boost: Union[float, jnp.array] = 1.0,
     use_available_supply: bool = False,
 ):
     """
@@ -169,7 +170,7 @@ def run_sim(
         np.datetime64(end_date),
         circ_supply_zero,
         locked_fil_zero,
-        daily_burnt_fil,
+        daily_burnt_fil*burn_boost,
         duration,
         full_renewal_rate_vec,
         burnt_fil_vec,
