@@ -1,4 +1,5 @@
 from typing import Union
+import datetime
 
 import numpy as np
 from numpy.typing import NDArray
@@ -36,7 +37,6 @@ def compute_day_delta_pledge(
     scheduled_pledge_release: float,
     lock_target: float,
     gamma: float,
-    gamma_weight_type: int
 ) -> float:
     # convert powers to PIB
     total_qa_power_pib = total_qa_power_eib * 1024.0
@@ -49,8 +49,7 @@ def compute_day_delta_pledge(
         total_qa_power_pib,
         baseline_power_pib,
         lock_target,
-        gamma,
-        gamma_weight_type
+        gamma
     )
     renews_delta = compute_renewals_delta_pledge(
         day_network_reward,
@@ -61,8 +60,7 @@ def compute_day_delta_pledge(
         renewal_rate,
         scheduled_pledge_release,
         lock_target,
-        gamma,
-        gamma_weight_type
+        gamma
     )
     return onboards_delta + renews_delta
 
@@ -78,7 +76,6 @@ def compute_day_locked_pledge(
     scheduled_pledge_release: float,
     lock_target: float,
     gamma: float,
-    gamma_weight_type: int
 ) -> float:
     # convert powers to PIB
     total_qa_power_pib = total_qa_power_eib * 1024.0
@@ -93,8 +90,7 @@ def compute_day_locked_pledge(
         total_qa_power_pib,
         baseline_power_pib,
         lock_target,
-        gamma,
-        gamma_weight_type
+        gamma
     )
     # print('jax', onboards_locked)
     # Total locked from renewals
@@ -106,8 +102,7 @@ def compute_day_locked_pledge(
         total_qa_power_pib,
         baseline_power_pib,
         lock_target,
-        gamma,
-        gamma_weight_type
+        gamma
     )
     renews_locked = jnp.maximum(original_pledge, new_pledge)
     # Total locked pledge
@@ -126,7 +121,6 @@ def compute_renewals_delta_pledge(
     scheduled_pledge_release: float,
     lock_target: float,
     gamma: float,
-    gamma_weight_type: int
 ) -> float:
     # Delta from sectors expiring
     expire_delta = -(1 - renewal_rate) * scheduled_pledge_release
@@ -139,8 +133,7 @@ def compute_renewals_delta_pledge(
         total_qa_power,
         baseline_power,
         lock_target,
-        gamma,
-        gamma_weight_type
+        gamma
     )
     renew_delta = jnp.maximum(0.0, new_pledge - original_pledge)
     # Delta for all scheduled sectors
@@ -156,7 +149,6 @@ def compute_new_pledge_for_added_power(
     baseline_power_pib: float,
     lock_target: float,
     gamma: float,
-    gamma_weight_type: int
 ) -> float:
     # storage collateral
     storage_pledge = 20.0 * day_network_reward * (day_added_qa_power_pib / total_qa_power_pib)
@@ -173,11 +165,7 @@ def compute_new_pledge_for_added_power(
     baseline_consensus_pledge = jnp.maximum(baseline_consensus_pledge, 0)
 
     # Compute Simple and Baseline Pledge Contributions to Consensus Pledge for Arithmetic, Geometric, and Harmonic Weightings 
-
-    #ngamma parameter for weighting 
-    weighting_method = gamma_weight_type #weighting schema (must be arithmetic=0, geometric=1, or harmonic=2)
-
-    consensus_pledge = weighted_consensus(weighting_method, gamma, simple_consensus_pledge, baseline_consensus_pledge)
+    consensus_pledge = weighted_consensus(gamma, simple_consensus_pledge, baseline_consensus_pledge)
 
     # total added pledge
     added_pledge = storage_pledge + consensus_pledge
@@ -186,36 +174,8 @@ def compute_new_pledge_for_added_power(
     return jnp.minimum(pledge_cap, added_pledge)
 
 @jax.jit
-def arithmetic_fn(w, simple_consensus_pledge, baseline_consensus_pledge):
+def weighted_consensus(w, simple_consensus_pledge, baseline_consensus_pledge):
     return (1 - w) * simple_consensus_pledge + w * baseline_consensus_pledge
-
-@jax.jit
-def geometric_fn(w, simple_consensus_pledge, baseline_consensus_pledge):
-    return simple_consensus_pledge ** (1 - w) * baseline_consensus_pledge ** w
-
-@jax.jit
-def harmonic_fn(w, simple_consensus_pledge, baseline_consensus_pledge):
-    return 1 / ((1 - w) * simple_consensus_pledge**-1 + w * baseline_consensus_pledge**-1)
-
-@jax.jit
-def weighted_consensus(weighting_method, w, simple_consensus_pledge, baseline_consensus_pledge):
-    # NOTE: I think this can be replaced w/ lax.switch
-    return lax.cond(
-        weighting_method == 0,
-        lambda _: arithmetic_fn(w, simple_consensus_pledge, baseline_consensus_pledge),
-        lambda _: lax.cond(
-            weighting_method == 1, 
-            lambda _: geometric_fn(w, simple_consensus_pledge, baseline_consensus_pledge),
-            lambda _: lax.cond(
-                weighting_method == 2, 
-                lambda _: harmonic_fn(w, simple_consensus_pledge, baseline_consensus_pledge),
-                lambda _: jnp.zeros_like(simple_consensus_pledge) * jnp.inf,  # Default branch, raise an error or handle it accordingly
-                operand=None
-            ),
-            operand=None
-        ),
-        operand=None
-    )
 
 @jax.jit
 def have_known_pledge_info(arggs):
@@ -264,3 +224,26 @@ def get_day_schedule_pledge_release(
     # Total pledge schedule releases
     day_pledge_schedules_release = known_day_release + model_day_release
     return day_pledge_schedules_release
+
+
+# Creates the trajectory of the gamma smoothing function for FIP-81 activation
+def create_gamma_trajectory(current_date: np.datetime64, 
+                            forecast_length_days: int, 
+                            historical_lenght: int, 
+                            ramp_len_days=365):
+
+    historical_gamma = jnp.ones(historical_lenght) * 1.0
+    days_since_activation = (current_date - constants.FIP81_ACTIVATION_DATE).days
+
+    gamma_slope = (1.0 - constants.FIP81_GAMMA_TARGET) / ramp_len_days
+    current_gamma = 1.0 - gamma_slope * days_since_activation
+
+    remaining_days = ramp_len_days - days_since_activation
+    v1 = np.linspace(current_gamma, constants.FIP81_GAMMA_TARGET, remaining_days)
+    v2 = np.ones(forecast_length_days - remaining_days) * constants.FIP81_GAMMA_TARGET
+    gamma_trajectory = np.concatenate([v1, v2])
+
+    gamma_vec = jnp.concatenate(
+        [historical_gamma, gamma_trajectory]
+    )
+    return gamma_vec
