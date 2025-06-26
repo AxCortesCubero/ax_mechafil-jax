@@ -148,14 +148,11 @@ def run_sim(
         [historical_target_lock, lock_target]
     )
     
-    # Set up the gamma smoothening for FIP-81
-    #gamma_old = jnp.ones(forecast_length) * gamma
-    historical_length = len(historical_renewal_rate)
+    # Set up the gamma smoothening for FIP-81 for the whole simulation duration.
     full_gamma_vec = create_gamma_trajectory(np.datetime64(current_date), 
                                              forecast_length, 
-                                             historical_length)
-    # Debug prints
-    #jax.debug.print("‖gamma - gamma_old‖₂ = {}", jnp.linalg.norm(gamma - gamma_old))
+                                             len(historical_renewal_rate))
+
     supply_forecast = supply.forecast_circulating_supply(
         np.datetime64(start_date),
         np.datetime64(current_date),
