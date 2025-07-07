@@ -149,7 +149,7 @@ def run_sim(
     )
     
     # Set up the gamma smoothening for FIP-81 for the whole simulation duration.
-    full_gamma_vec = create_gamma_trajectory(np.datetime64(current_date), 
+    full_gamma_vec = create_gamma_trajectory(current_date, 
                                              forecast_length, 
                                              len(historical_renewal_rate))
 
