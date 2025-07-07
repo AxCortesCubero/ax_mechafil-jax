@@ -164,7 +164,7 @@ def compute_new_pledge_for_added_power(
     baseline_consensus_pledge = lock_target * prev_circ_supply * normalized_qap_growth
     baseline_consensus_pledge = jnp.maximum(baseline_consensus_pledge, 0)
 
-    # Compute Simple and Baseline Pledge Contributions to Consensus Pledge for Arithmetic, Geometric, and Harmonic Weightings 
+    # Compute Simple and Baseline Pledge Contributions to Consensus Pledge
     consensus_pledge = weighted_consensus(gamma, simple_consensus_pledge, baseline_consensus_pledge)
 
     # total added pledge
