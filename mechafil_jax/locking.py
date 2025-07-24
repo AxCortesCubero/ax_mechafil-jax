@@ -241,7 +241,7 @@ def create_gamma_trajectory(current_date: np.datetime64,
     remaining_days = ramp_len_days - days_since_activation
     v1 = jnp.linspace(current_gamma, constants.FIP81_GAMMA_TARGET, remaining_days)
     v2 = jnp.ones(forecast_length_days - remaining_days) * constants.FIP81_GAMMA_TARGET
-    gamma_trajectory = np.concatenate([v1, v2])
+    gamma_trajectory = jnp.concatenate([v1, v2])
 
     gamma_vec = jnp.concatenate(
         [historical_gamma, gamma_trajectory]
