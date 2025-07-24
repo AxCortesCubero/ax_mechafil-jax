@@ -4,8 +4,8 @@ from datetime import date, timedelta
 from dotenv import load_dotenv
 
 
-#from jax import config
-#config.update("jax_enable_x64", True)
+from jax import config
+config.update("jax_enable_x64", True)
 
 import mechafil_jax.data as data
 import mechafil_jax.supply as jax_supply
