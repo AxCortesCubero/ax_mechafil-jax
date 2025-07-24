@@ -66,7 +66,7 @@ class TestFip81(unittest.TestCase):
             results_original = pickle.load(f)
         
         # Setup correct date to match reference calculations
-        current_date = date(2025, 7, 23) # WARNING: do not change this variable
+        current_date = date(2025, 7, 6) # WARNING: do not change this variable
         forecast_length_days = 365 * 5 # WARNING: do not change this variable
         
         # Setup
