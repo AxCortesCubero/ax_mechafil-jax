@@ -93,6 +93,7 @@ class TestFip81(unittest.TestCase):
         for key in results_original[0]:  # Assuming results are stored as dictionaries
             original_result = results_original[0][key]
             simulation_result = simulation_results[key]
+            print(f"Comparing key: {key}")
         
             self.assertTrue(
                 np.allclose(original_result, simulation_result, rtol=1e-10, atol=1e-10), 
