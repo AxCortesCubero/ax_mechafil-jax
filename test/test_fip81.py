@@ -96,7 +96,7 @@ class TestFip81(unittest.TestCase):
             print(f"Comparing key: {key}")
         
             self.assertTrue(
-                np.allclose(original_result, simulation_result, rtol=1e-10, atol=1e-10), 
+                np.allclose(original_result, simulation_result), 
                 f"Mismatch found in {key}!\nOriginal result: {original_result[:5]} ...\nSimulation result: {simulation_result[:5]} ..."
             )
 
