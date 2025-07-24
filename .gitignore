@@ -5,6 +5,7 @@ mechafil_jax.egg-info/
 
 # Python cache
 mechafil_jax/__pycache__/
+test/__pycache__/
 
 .env
 

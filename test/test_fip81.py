@@ -7,99 +7,97 @@ from dotenv import load_dotenv
 from jax import config
 config.update("jax_enable_x64", True)
 
-import pystarboard.data as data
+import mechafil_jax.data as data
 import mechafil_jax.supply as jax_supply
 import mechafil_jax.constants as C
+import mechafil_jax.sim as sim
+import scenario_generator.utils as u
 
 import numpy as np
 import jax.numpy as jnp
 import tqdm.auto as tqdm
+import pickle
+import json
 
-class TestSupply(unittest.TestCase):
-    def test_forecast_supply(self):
+
+class TestFip81(unittest.TestCase):
+    def get_offline_data(self, start_date, current_date, end_date):
         # Load the .env file
         load_dotenv()
+        # Get the path to the authentication file from the environment variable
         auth_file_path = os.getenv('SPACESCOPE_AUTH_PATH')
         
-        # Setup data access
         if auth_file_path:
-            data.setup_spacescope(auth_file_path)
+            # Load the token from the JSON file
+            with open(auth_file_path, 'r') as f:
+                auth_data = json.load(f)
+        
+            # Assuming the key in the JSON file is "auth_key" and it contains the Bearer token
+            PUBLIC_AUTH_TOKEN = auth_data.get('auth_key')
+            
+            if PUBLIC_AUTH_TOKEN:
+                pass
+            else:
+                raise Exception("The 'auth_key' is missing in the JSON file.")
         else:
-            raise Exception("SPACESCOPE_AUTH_PATH environment variable is not set")
+            raise Exception("SPACESCOPE_AUTH_PATH environment variable is not set.")
+        
+        offline_data = data.get_simulation_data(PUBLIC_AUTH_TOKEN, start_date, current_date, end_date)
 
-        forecast_length = 360*2
-        start_date = date(2021, 3, 16)
-        current_date = date.today() - timedelta(days=2)
-        end_date = current_date + timedelta(days=forecast_length)
+        _, hist_rbp = u.get_historical_daily_onboarded_power(current_date - timedelta(days=180), current_date)
+        _, hist_rr = u.get_historical_renewal_rate(current_date - timedelta(days=180), current_date)
+        _, hist_fpr = u.get_historical_filplus_rate(current_date - timedelta(days=180), current_date)
+        smoothed_last_historical_rbp = float(np.median(hist_rbp[-30:]))
+        smoothed_last_historical_rr = float(np.median(hist_rr[-30:]))
+        smoothed_last_historical_fpr = float(np.median(hist_fpr[-30:]))
 
-        # Get sector scheduled expirations
-        res = data.get_sector_expiration_stats(start_date, current_date, end_date)
-        rb_known_scheduled_expire_vec = res[0]
-        qa_known_scheduled_expire_vec = res[1]
-        known_scheduled_pledge_release_full_vec = res[2]
-        # Get daily stats
-        fil_stats_df = data.get_historical_network_stats(start_date, current_date, end_date)
-        current_day_stats = fil_stats_df[fil_stats_df["date"] >= current_date].iloc[0]
-        rb_power_zero = current_day_stats["total_raw_power_eib"] * 1024.0
-        qa_power_zero = current_day_stats["total_qa_power_eib"] * 1024.0
+        result = (
+            offline_data, smoothed_last_historical_rbp, smoothed_last_historical_rr,
+            smoothed_last_historical_fpr, hist_rbp, hist_rr, hist_fpr
+        )
+        return result
 
-        # consider sweeping these to build confidence in JAX implementation
-        rr = 0.3
-        fpr = 0.3
-        duration = 360
-        rbp = 3
+    def test_fip81(self):
+
+        # Load data from original fip81 implementation
+        test_dir = os.path.dirname(__file__)  # This will get the directory of the current test file
+        file_path = os.path.join(test_dir, 'results_original_branch.pkl')
+        with open(file_path, 'rb') as f:
+            results_original = pickle.load(f)
+        
+        # Setup correct date to match reference calculations
+        current_date = date(2025, 7, 23) # WARNING: do not change this variable
+        forecast_length_days = 365 * 5 # WARNING: do not change this variable
+        
+        # Setup
+        mo_start = max(current_date.month - 1 % 12, 1)
+        start_date = date(current_date.year, mo_start, 1)
+        end_date = current_date + timedelta(days=forecast_length_days)
+
+        #Get Data
+        offline_data, smoothed_rbp, smoothed_rr, smoothed_fpr, *_ = self.get_offline_data(start_date, current_date, end_date)
+
+        sector_duration_days = 540
         lock_target = 0.3
+        rbp = jnp.ones(forecast_length_days) * smoothed_rbp
+        rr = jnp.ones(forecast_length_days) * smoothed_rr
+        fpr = jnp.ones(forecast_length_days) * smoothed_fpr
 
-        vest_df
-        mint_df
+        # Run simulation
+        simulation_results = sim.run_sim(
+            rbp, rr, fpr, lock_target, start_date, current_date,
+            forecast_length_days, sector_duration_days, offline_data,
+            use_available_supply=False
+        )
 
-        # convert mint + vest into dictionaries
-        vest_dict = {
-            "days": vest_df['days'].values,
-            'total_vest': np.asarray(vest_df['total_vest'].values),
-        }
-        mint_dict = {
-            'days': mint_df['days'].values,
-            'network_RBP_EIB': np.asarray(mint_df['network_RBP'].values) / C.EIB,
-            'network_QAP_EIB': np.asarray(mint_df['network_QAP'].values) / C.EIB,
-            'day_onboarded_power_QAP_PIB': np.asarray(mint_df['day_onboarded_power_QAP'].values / C.PIB),
-            'day_renewed_power_QAP_PIB': np.asarray(mint_df['day_renewed_power_QAP'].values / C.PIB),
-            'cum_simple_reward': np.asarray(mint_df['cum_simple_reward'].values),
-            'network_baseline_EIB': np.asarray(mint_df['network_baseline'].values) / C.EIB,
-            'capped_power_EIB': np.asarray(mint_df['capped_power'].values) / C.EIB,
-            'cum_capped_power_EIB': np.asarray(mint_df['cum_capped_power'].values) / C.EIB,
-            'network_time': np.asarray(mint_df['network_time'].values),
-            'cum_baseline_reward': np.asarray(mint_df['cum_baseline_reward'].values),
-            'cum_network_reward': np.asarray(mint_df['cum_network_reward'].values),
-            'day_network_reward': np.asarray(mint_df['day_network_reward'].values),
-        }
-        historical_target_lock = jnp.ones(len(past_renewal_rate_vec)) * 0.3
-        lock_target = jnp.ones(forecast_length) * lock_target
-        full_lock_target_vec = jnp.concatenate(
-            [historical_target_lock, lock_target]
-        )
-        # these are the default values
-        gamma_vec = jnp.ones(len(full_lock_target_vec)) * 1.0
-        cil_jax = jax_supply.forecast_circulating_supply(
-            np.datetime64(start_date),
-            np.datetime64(current_date),
-            np.datetime64(end_date),
-            circ_supply_zero,
-            locked_fil_zero,
-            daily_burnt_fil,
-            duration,
-            renewal_rate_vec,
-            jnp.asarray(burnt_fil_vec),
-            vest_dict,
-            mint_dict,
-            jnp.asarray(known_scheduled_pledge_release_full_vec),
-            lock_target=full_lock_target_vec,
-            gamma=gamma_vec,
-        )
-        keys = ['circ_supply', 'network_gas_burn', 'day_locked_pledge', 'day_renewed_pledge',
-                'network_locked_pledge', 'network_locked', 'network_locked_reward', 'disbursed_reserve']
-        for k in keys:
-            self.assertTrue(np.allclose(cil_df[k].values, np.asarray(cil_jax[k])), k)
+        for key in results_original[0]:  # Assuming results are stored as dictionaries
+            original_result = results_original[0][key]
+            simulation_result = simulation_results[key]
+        
+            self.assertTrue(
+                np.allclose(original_result, simulation_result, rtol=1e-10, atol=1e-10), 
+                f"Mismatch found in {key}!\nOriginal result: {original_result[:5]} ...\nSimulation result: {simulation_result[:5]} ..."
+            )
 
 if __name__ == '__main__':
     unittest.main()

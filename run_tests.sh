@@ -1,3 +1,3 @@
 #!/bin/bash
 
-py.test
+py.test test/test_fip81.py
