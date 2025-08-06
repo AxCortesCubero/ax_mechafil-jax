@@ -16,6 +16,7 @@ import mechafil_jax.vesting as vesting
 import mechafil_jax.minting as minting
 import mechafil_jax.supply as supply
 import mechafil_jax.constants as C
+from mechafil_jax.locking import create_gamma_trajectory
 
 @partial(jax.jit, static_argnums=(4,5,6,7))
 def run_sim(
@@ -31,8 +32,6 @@ def run_sim(
     baseline_function_EIB: jnp.array = None,
     fil_plus_m: Union[float, jnp.array] = 10.0,
     qa_renew_relative_multiplier_vec: jnp.array = 1.0,
-    gamma: Union[float, jnp.array] = 1.0,
-    gamma_weight_type: Union[int, jnp.array] = 0,
     burn_boost: Union[float, jnp.array] = 1.0,
     use_available_supply: bool = False,
 ):
@@ -66,12 +65,6 @@ def run_sim(
         be of length `forecast_length` and the multiplier can be time-varying. This applies to the forecasts, but not historical data.
     qa_renew_relative_multiplier_vec: jnp.array
         The QA renewal relative multiplier. If a float, then the multiplier is constant across the simulation. If it is a vector, then it must
-        be of length `forecast_length` and the multiplier can be time-varying. This applies to the forecasts, but not historical data.
-    gamma: Union[float, jnp.array]
-        The gamma parameter. If a float, then the multiplier is constant across the simulation. If it is a vector, then it must
-        be of length `forecast_length` and the multiplier can be time-varying. This applies to the forecasts, but not historical data.
-    gamma_weight_type: Union[int, jnp.array]
-        The gamma weight type. If a float, then the multiplier is constant across the simulation. If it is a vector, then it must
         be of length `forecast_length` and the multiplier can be time-varying. This applies to the forecasts, but not historical data.
     """
 
@@ -154,16 +147,12 @@ def run_sim(
     full_lock_target_vec = jnp.concatenate(
         [historical_target_lock, lock_target]
     )
-    historical_gamma = jnp.ones(len(historical_renewal_rate)) * 1.0
-    gamma = jnp.ones(forecast_length) * gamma
-    historical_gamma_weight_type = jnp.zeros(len(historical_renewal_rate))
-    gamma_weight_type = jnp.ones(forecast_length) * gamma_weight_type
-    full_gamma_vec = jnp.concatenate(
-        [historical_gamma, gamma]
-    )
-    full_gamma_weight_type_vec = jnp.concatenate(
-        [historical_gamma_weight_type, gamma_weight_type]
-    )
+    
+    # Set up the gamma smoothening for FIP-81 for the whole simulation duration.
+    full_gamma_vec = create_gamma_trajectory(current_date, 
+                                             forecast_length, 
+                                             len(historical_renewal_rate))
+
     supply_forecast = supply.forecast_circulating_supply(
         np.datetime64(start_date),
         np.datetime64(current_date),
@@ -179,7 +168,6 @@ def run_sim(
         known_scheduled_pledge_release_full_vec,
         lock_target=full_lock_target_vec,
         gamma=full_gamma_vec,
-        gamma_weight_type=full_gamma_weight_type_vec,
         use_available_supply=use_available_supply,
     )
 
@@ -212,3 +200,4 @@ def run_sim(
     ############################
 
     return results
+

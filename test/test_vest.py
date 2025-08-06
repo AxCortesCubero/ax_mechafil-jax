@@ -1,6 +1,7 @@
 import os
 import unittest
 from datetime import date, timedelta
+from dotenv import load_dotenv
 
 from jax import config
 config.update("jax_enable_x64", True)
@@ -16,10 +17,16 @@ import argparse
 
 class TestVesting(unittest.TestCase):
     def test_vesting(self):
-        # setup data access
-        # TODO: better way to do this?
-        data.setup_spacescope(os.path.join(os.environ['HOME'],'code/cel/auth/spacescope_auth.json'))
-        mecha_data.setup_spacescope(os.path.join(os.environ['HOME'],'code/cel/auth/spacescope_auth.json'))
+        # Load the .env file
+        load_dotenv()
+        auth_file_path = os.getenv('SPACESCOPE_AUTH_PATH')
+        
+        # Setup data access
+        if auth_file_path:
+            data.setup_spacescope(auth_file_path)
+            mecha_data.setup_spacescope(auth_file_path)
+        else:
+            raise Exception("SPACESCOPE_AUTH_PATH environment variable is not set")
 
         start_date = date(2021, 3, 16)
         forecast_length = 5*365

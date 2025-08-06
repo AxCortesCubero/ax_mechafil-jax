@@ -40,7 +40,7 @@ def update_cs_day(carry, x):
     # Compute daily change in initial pledge collateral
     day_idx, current_day_idx, cs_dict, known_scheduled_pledge_release_vec, circ_supply, available_supply, \
         daily_burnt_fil, len_burnt_fil_vec, renewal_rate_vec, duration, lock_target, \
-        gamma_vec, gamma_weight_type_vec, use_available_supply = carry
+        gamma_vec, use_available_supply = carry
 
     cs_or_as = jnp.where(use_available_supply, available_supply, circ_supply)
 
@@ -63,7 +63,6 @@ def update_cs_day(carry, x):
         scheduled_pledge_release,
         lock_target[day_idx],
         gamma_vec[day_idx],
-        gamma_weight_type_vec[day_idx],
     )
     # Get total locked pledge (needed for future day_locked_pledge)
     day_locked_pledge, day_renewed_pledge = compute_day_locked_pledge(
@@ -76,8 +75,7 @@ def update_cs_day(carry, x):
         renewal_rate_vec[day_idx],
         scheduled_pledge_release,
         lock_target[day_idx],
-        gamma_vec[day_idx],
-        gamma_weight_type_vec[day_idx],
+        gamma_vec[day_idx]
     )
 
     # Compute daily change in block rewards collateral
@@ -145,7 +143,6 @@ def update_cs_day(carry, x):
         duration,
         lock_target,
         gamma_vec,
-        gamma_weight_type_vec,
         use_available_supply,
     )
     return (return_carry, None)
@@ -166,7 +163,6 @@ def forecast_circulating_supply(
     known_scheduled_pledge_release_vec: Union[jnp.array, NDArray],
     lock_target: Union[jnp.array, NDArray],
     gamma: Union[jnp.array, NDArray],
-    gamma_weight_type: Union[jnp.array, NDArray],
     use_available_supply: bool = False,
 ) -> Dict:
     # we assume all stats started at main net launch, in 2020-10-15
@@ -193,7 +189,7 @@ def forecast_circulating_supply(
     current_day_idx = current_day - start_day
     init_in = (day_idx_start, current_day_idx, cs_dict, known_scheduled_pledge_release_vec, 
                circ_supply, available_supply, daily_burnt_fil, len(burnt_fil_vec), renewal_rate_vec, duration, 
-               lock_target, gamma, gamma_weight_type, use_available_supply)
+               lock_target, gamma, use_available_supply)
     ret, _ = lax.scan(update_cs_day, init_in, None, length=sim_len)
     # ret, _ = imitate_lax.scan(update_cs_day, init_in, None, length=sim_len-1)  # for debugging and seeing print statements
     cs_dict = ret[2]

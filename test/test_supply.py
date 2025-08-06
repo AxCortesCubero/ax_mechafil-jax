@@ -1,6 +1,7 @@
 import os
 import unittest
 from datetime import date, timedelta
+from dotenv import load_dotenv
 
 
 from jax import config
@@ -23,10 +24,16 @@ import tqdm.auto as tqdm
 
 class TestSupply(unittest.TestCase):
     def test_forecast_supply(self):
-        # setup data access
-        # TODO: better way to do this?
-        data.setup_spacescope(os.path.join(os.environ['HOME'],'code/cel/auth/spacescope_auth.json'))
-        mecha_data.setup_spacescope(os.path.join(os.environ['HOME'],'code/cel/auth/spacescope_auth.json'))
+        # Load the .env file
+        load_dotenv()
+        auth_file_path = os.getenv('SPACESCOPE_AUTH_PATH')
+        
+        # Setup data access
+        if auth_file_path:
+            data.setup_spacescope(auth_file_path)
+            mecha_data.setup_spacescope(auth_file_path)
+        else:
+            raise Exception("SPACESCOPE_AUTH_PATH environment variable is not set")
 
         forecast_length = 360*2
         start_date = date(2021, 3, 16)
@@ -144,7 +151,6 @@ class TestSupply(unittest.TestCase):
         )
         # these are the default values
         gamma_vec = jnp.ones(len(full_lock_target_vec)) * 1.0
-        gamma_weight_type_vec = jnp.zeros(len(full_lock_target_vec))
         cil_jax = jax_supply.forecast_circulating_supply(
             np.datetime64(start_date),
             np.datetime64(current_date),
@@ -160,7 +166,6 @@ class TestSupply(unittest.TestCase):
             jnp.asarray(known_scheduled_pledge_release_full_vec),
             lock_target=full_lock_target_vec,
             gamma=gamma_vec,
-            gamma_weight_type=gamma_weight_type_vec,
         )
         keys = ['circ_supply', 'network_gas_burn', 'day_locked_pledge', 'day_renewed_pledge',
                 'network_locked_pledge', 'network_locked', 'network_locked_reward', 'disbursed_reserve']
