@@ -20,7 +20,7 @@ MINING_RESERVE = 0.15 * FIL_BASE
 A port of the vesting module in mechafil to JAX.
 """
 
-@partial(jax.jit, static_argnums=(0,1,2))
+@partial(jax.jit, static_argnums=(0,1))
 def compute_vesting_trajectory(
     start_date: np.datetime64, end_date: np.datetime64, start_vested_amt: int
 ) -> Dict:

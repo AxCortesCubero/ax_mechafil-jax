@@ -31,7 +31,7 @@ GROWTH_RATE = float(
 BASELINE_STORAGE = 2.766213637444971 * EXA / EXBI  # b_0 from https://spec.filecoin.io/#section-systems.filecoin_token
 
 # @partial(jax.jit, static_argnums=(0, 1, 6, 7, 8))
-@partial(jax.jit, static_argnums=(0, 1, 6, 8))
+@partial(jax.jit, static_argnums=(0, 1, 8))
 def compute_minting_trajectory_df(
     start_date: np.datetime64,
     end_date: np.datetime64,
@@ -95,7 +95,7 @@ def cum_simple_minting(day: int) -> float:
     return SIMPLE_ALLOC * (1 - jnp.exp(-LAMBDA * day))
 
 
-@partial(jax.jit, static_argnums=(0,1,2))
+@partial(jax.jit, static_argnums=(0,1))
 def compute_baseline_power_array(
     start_date: np.datetime64, end_date: np.datetime64, init_baseline: float,
 ) -> Union[jnp.ndarray, NDArray, float]:
