@@ -9,14 +9,6 @@ MechaFil-JAX is a Python package that simulates the Filecoin network's economic 
 - **Power Dynamics**: Raw Byte Power (RBP) and Quality Adjusted Power (QAP) calculations
 - **Token Minting**: Network reward calculations based on storage power and baseline
 - **Token Supply**: Circulating supply management including locked tokens and vesting schedules
-- 
-## Features
-
-- **High Performance**: JAX-accelerated computations for fast simulations
-- **Comprehensive Modeling**: Complete economic model covering power, minting, vesting, and supply
-- **Historical Data Integration**: Works with real Filecoin network data via Spacescope API
-- **Extensive Testing**: Unit tests covering critical functionality
-- **Jupyter Notebooks**: Example simulations and debugging tools
 
 ## Key Modules
 
