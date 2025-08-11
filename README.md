@@ -26,4 +26,3 @@ See the `notebooks/` directory for detailed examples:
 
 - **`sim_example.ipynb`**: Basic simulation example comparing NumPy and JAX implementations
 - **`time_mechafil_jax.ipynb`**: Performance benchmarking
-- **Module debugging notebooks**: Individual component testing and validation
