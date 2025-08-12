@@ -10,7 +10,7 @@ setuptools.setup(
         "numpy", 
         "scipy", 
         "matplotlib",
-        "pystarboard @ git+https://git@github.com/protocol/pystarboard.git",
+        "pystarboard @ git+https://git@github.com/celtd/pystarboard.git",
     ],
 
     tests_require = [
