@@ -10,14 +10,12 @@ setuptools.setup(
         "numpy", 
         "scipy", 
         "matplotlib",
-        "scenario-generator @ git+https://github.com/CELtd/scenario-generator", 
-        "pystarboard @ git+https://github.com/CELtd/pystarboard@updated_dependencies",
-
+        "pystarboard @ git+https://git@github.com/celtd/pystarboard.git",
     ],
-    extras_require = {
-    "test": [
-        "pytest",
-        "mechaFIL @ git+https://github.com/CELtd/filecoin-mecha-twin@mechafil-jax-pandas-updates",
+
+    tests_require = [
+        'pytest',
+        'pandas==1.5.3',
+        'mechaFIL @ git+https://git@github.com/celtd/filecoin-mecha-twin.git@mechafil_jax'  # get the branch that is built for comparisons w/ jax
     ]
-}
 )
