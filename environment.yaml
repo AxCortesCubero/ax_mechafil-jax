@@ -14,4 +14,4 @@ dependencies:
   - dill
   - diskcache
   - pip:
-      - -e .[test]
+      - "-e .[test]"

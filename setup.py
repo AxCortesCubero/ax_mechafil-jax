@@ -10,11 +10,13 @@ setuptools.setup(
         "numpy", 
         "scipy", 
         "matplotlib",
-        "pystarboard @ git+https://git@github.com/celtd/pystarboard.git",
-    ],
+        "pystarboard @ git+https://github.com/CELtd/pystarboard.git",
 
-    tests_require = [
-        'pytest',
-        'mechaFIL @ git+https://git@github.com/celtd/filecoin-mecha-twin.git@mechafil_jax'  # get the branch that is built for comparisons w/ jax
+    ],
+    extras_require = {
+    "test": [
+        "pytest",
+        "mechaFIL @ git+https://github.com/CELtd/filecoin-mecha-twin@mechafil_jax",
     ]
+}
 )
