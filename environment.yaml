@@ -2,13 +2,16 @@ name: cel
 channels:
   - conda-forge
 dependencies:
-  - python=3.10
+  - python=3.11
   - pip
-  - jax
-  - numpy
   - jupyter
+  - ipykernel
+  - python-dotenv
+  - tqdm
+  - ipympl
   - matplotlib
   - seaborn
-  - ipympl
   - dill
-  - jupyterlab
+  - diskcache
+  - pip:
+      - "-e .[test]"
