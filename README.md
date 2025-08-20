@@ -26,3 +26,21 @@ See the `notebooks/` directory for detailed examples:
 
 - **`sim_example.ipynb`**: Basic simulation example comparing NumPy and JAX implementations
 - **`time_mechafil_jax.ipynb`**: Performance benchmarking
+
+## Usage
+Clone the repo.
+Set up the environment with
+``` bash
+./setup_env.sh
+
+```
+Activate the virtual environment
+```bash
+conda activate cel
+```
+
+Run the tests:
+```bash
+./run_tests.sh
+```
+
