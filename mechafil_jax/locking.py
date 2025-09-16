@@ -236,47 +236,49 @@ def create_gamma_trajectory(
 ):
     activation_date = np.datetime64(constants.FIP81_ACTIVATION_DATE, "D")
     current_date = np.datetime64(current_date, "D")
-    
-    # Calculate start_date from current_date and historical_length
-    start_date = current_date - np.timedelta64(historical_length, "D")
-    
+
     # Ramp slope
     gamma_slope = (1.0 - constants.FIP81_GAMMA_TARGET) / ramp_len_days
 
     # Days since activation (can be negative if before activation)
     days_since_activation = int((current_date - activation_date) / np.timedelta64(1, "D"))
 
-    # Historical gamma - account for FIP-81 activation within historical period
-    historical_gamma_list = []
-    for i in range(historical_length):
-        day_date = start_date + np.timedelta64(i, "D")
-        days_since_activation_hist = int((day_date - activation_date) / np.timedelta64(1, "D"))
-        
-        if days_since_activation_hist < 0:
-            gamma_val = 1.0
-        else:
-            gamma_val = max(1.0 - gamma_slope * days_since_activation_hist, constants.FIP81_GAMMA_TARGET)
-        
-        historical_gamma_list.append(gamma_val)
-    
-    historical_gamma = jnp.array(historical_gamma_list)
+    # ------------------------------------------------------------------
+    # Historical gamma (vectorized)
+    # ------------------------------------------------------------------
+    # Make an array of all historical dates as "days since activation"
+    hist_days = jnp.arange(-historical_length, 0) + days_since_activation
+    # Apply piecewise function in vectorized form
+    historical_gamma = jnp.where(
+        hist_days < 0,
+        1.0,
+        jnp.maximum(1.0 - gamma_slope * hist_days, constants.FIP81_GAMMA_TARGET),
+    )
 
-    # If still before activation → gamma stays at 1.0
+    # ------------------------------------------------------------------
+    # Forecast gamma 
+    # ------------------------------------------------------------------
     if days_since_activation < 0:
+        # Before activation → all ones
         gamma_trajectory = jnp.ones(forecast_length_days)
     else:
-        current_gamma = max(1.0 - gamma_slope * days_since_activation, constants.FIP81_GAMMA_TARGET)
-
-        # Remaining ramp days (non-negative)
+        current_gamma = max(
+            1.0 - gamma_slope * days_since_activation,
+            constants.FIP81_GAMMA_TARGET,
+        )
         remaining_days = max(ramp_len_days - days_since_activation, 0)
 
         if remaining_days > 0:
-            v1 = jnp.linspace(current_gamma, constants.FIP81_GAMMA_TARGET, remaining_days)
+            v1 = jnp.linspace(
+                current_gamma, constants.FIP81_GAMMA_TARGET, remaining_days
+            )
             v2 = jnp.ones(forecast_length_days - remaining_days) * constants.FIP81_GAMMA_TARGET
             gamma_trajectory = jnp.concatenate([v1, v2])
         else:
-            # Already past ramp end
             gamma_trajectory = jnp.ones(forecast_length_days) * constants.FIP81_GAMMA_TARGET
 
+    # ------------------------------------------------------------------
+    # Combine history + forecast
+    # ------------------------------------------------------------------
     gamma_vec = jnp.concatenate([historical_gamma, gamma_trajectory])
     return gamma_vec
