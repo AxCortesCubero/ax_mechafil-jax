@@ -13,13 +13,14 @@
 # ]
 # ///
 """
-1-year Filecoin forecast using last-30-day medians as static inputs.
+Multi-scenario Filecoin 1-year forecast.
 
-Produces two figures:
-  1. forecast_panel.png  – 4x3 panel (inputs, power, supply, economics)
+Scenarios are defined as dicts and overlaid on the same 4x3 panel.
+Easy to add new scenarios by appending to the SCENARIOS list.
+
+Produces:
+  1. forecast_panel.png  – 4x3 panel with all scenarios overlaid
   2. bugfix_comparison.png – before/after comparison of the 50/50 fix
-
-Historical data shown as solid, forecast as dashed, on-chain as black.
 """
 
 import sys, time
@@ -42,7 +43,7 @@ from pystarboard.data_spacescope import SpacescopeDataConnection
 AUTH_TOKEN      = "Bearer ghp_EviOPunZooyAagPPmftIsHfWarumaFOUdBUZ"
 CURRENT_DATE    = date.today() - timedelta(days=3)
 HISTORY_DAYS    = 365           # days of history (365 needed for FoFR 1Y rolling window)
-FORECAST_DAYS   = 365           # 1-year forecast
+FORECAST_DAYS   = 730           # 2-year forecast
 SIM_EXTRA       = 365           # extra days so FoFR convolution extends through forecast
 SECTOR_DURATION = 360
 LOCK_TARGET     = 0.3
@@ -51,7 +52,8 @@ LOOKBACK        = 30            # days to median for input derivation
 
 START_DATE = CURRENT_DATE - timedelta(days=HISTORY_DAYS)
 END_DATE   = CURRENT_DATE + timedelta(days=FORECAST_DAYS)
-SIM_END    = CURRENT_DATE + timedelta(days=FORECAST_DAYS + SIM_EXTRA)  # extended for FoFR
+SIM_END    = CURRENT_DATE + timedelta(days=FORECAST_DAYS + SIM_EXTRA)
+SIM_FCST   = FORECAST_DAYS + SIM_EXTRA
 
 print(f"History:  {START_DATE} -> {CURRENT_DATE}  ({HISTORY_DAYS} days)")
 print(f"Forecast: {CURRENT_DATE} -> {END_DATE}  ({FORECAST_DAYS} days)")
@@ -68,13 +70,16 @@ qa_pib  = sim_data["historical_onboarded_qa_power_pib"][-LOOKBACK:]
 rr_hist = sim_data["historical_renewal_rate"][-LOOKBACK:]
 
 rbp_pib_day = float(np.median(rb_pib))
-rbp_eib_day = rbp_pib_day / 1024.0
 rr_val      = float(np.median(rr_hist))
 ratio       = np.where(rb_pib > 0, qa_pib / rb_pib, 1.0)
 fpr_val     = float(np.median(np.clip((ratio - 1.0) / 9.0, 0.0, 1.0)))
 
-print(f"\nInputs (30-day median, held constant for forecast):")
-print(f"  RB Onboarding : {rbp_pib_day:.2f} PiB/day  ({rbp_eib_day:.4f} EiB/day)")
+# NOTE: sim.run_sim docstring says rb_onboard_power is "in EiB" but
+# forecast_power_stats adds it directly to rb_power_zero which is in PiB.
+# The correct unit is PiB. The docstring is wrong.
+
+print(f"\nInputs (30-day median):")
+print(f"  RB Onboarding : {rbp_pib_day:.2f} PiB/day  ({rbp_pib_day/1024:.4f} EiB/day)")
 print(f"  Renewal Rate  : {rr_val:.4f}  ({rr_val*100:.1f}%)")
 print(f"  FIL+ Rate     : {fpr_val:.4f}  ({fpr_val*100:.1f}%)")
 
@@ -86,32 +91,99 @@ print(f"  locked_fil_zero   = {locked_total/1e6:.2f}M FIL")
 print(f"  locked_reward_est = {locked_reward/1e6:.2f}M FIL  ({locked_reward/locked_total*100:.1f}%)")
 print(f"  locked_pledge_est = {(locked_total-locked_reward)/1e6:.2f}M FIL  ({(1-locked_reward/locked_total)*100:.1f}%)")
 
-# ── Run simulations ─────────────────────────────────────────────────
-SIM_FCST = FORECAST_DAYS + SIM_EXTRA
-rbp_vec = jnp.ones(SIM_FCST) * rbp_eib_day
+# ── Fit log-linear trend on historical RB onboarding ───────────────
+hist_rbp_full = np.array(sim_data["historical_onboarded_rb_power_pib"])
+# Use a smoothed version to avoid fitting noise; filter out zeros
+valid = hist_rbp_full > 0
+x_hist = np.arange(len(hist_rbp_full))
+if valid.sum() > 10:
+    log_rb = np.log(hist_rbp_full[valid])
+    x_valid = x_hist[valid]
+    # Fit: log(rb_pib) = a + b * day_index
+    b, a = np.polyfit(x_valid, log_rb, 1)
+    # Extrapolate into forecast
+    x_fcst = np.arange(len(hist_rbp_full), len(hist_rbp_full) + SIM_FCST)
+    rbp_trend_pib = np.exp(a + b * x_fcst)
+    trend_start_pib = float(rbp_trend_pib[0])
+    trend_end_pib = float(rbp_trend_pib[FORECAST_DAYS - 1])
+    daily_pct = (np.exp(b) - 1) * 100
+    print(f"\nLog-linear trend fit:")
+    print(f"  Daily rate    : {daily_pct:+.3f}%/day  ({daily_pct*365:+.1f}%/yr)")
+    print(f"  Forecast start: {trend_start_pib:.2f} PiB/day")
+    print(f"  Forecast end  : {trend_end_pib:.2f} PiB/day")
+else:
+    print("\nWARNING: not enough valid RB data to fit trend")
+    rbp_trend_pib = np.ones(SIM_FCST) * rbp_pib_day
+
+# ── Common inputs (RR and FIL+ are static for all scenarios) ───────
 rr_vec  = jnp.ones(SIM_FCST) * rr_val
 fpr_vec = jnp.ones(SIM_FCST) * fpr_val
 
-print("\nRunning simulation [fixed] ...")
-t0 = time.time()
-results = sim.run_sim(
-    rbp_vec, rr_vec, fpr_vec,
-    LOCK_TARGET, START_DATE, CURRENT_DATE, SIM_FCST, SECTOR_DURATION,
-    sim_data,
-)
-print(f"  done ({time.time()-t0:.1f}s)")
+# ════════════════════════════════════════════════════════════════════
+# SCENARIOS
+# ════════════════════════════════════════════════════════════════════
+# ── Attrition scenario: linear ramp down over forecast horizon ──────
+rr_end_frac   = 0.50   # RR drops to 50% of current
+rbp_end_frac  = 0.25   # RBP drops to 25% of current
 
-# Run the old 50/50 version for comparison
-print("Running simulation [old 50/50] ...")
-sim_data_old = {k: v for k, v in sim_data.items() if k != "locked_reward_zero"}
-results_old = sim.run_sim(
-    rbp_vec, rr_vec, fpr_vec,
-    LOCK_TARGET, START_DATE, CURRENT_DATE, SIM_FCST, SECTOR_DURATION,
-    sim_data_old,
-)
-print(f"  done")
+rr_ramp  = jnp.linspace(rr_val, rr_val * rr_end_frac, FORECAST_DAYS)
+rbp_ramp_pib = jnp.linspace(rbp_pib_day, rbp_pib_day * rbp_end_frac, FORECAST_DAYS)
+rr_attrition  = jnp.concatenate([rr_ramp,  jnp.ones(SIM_EXTRA) * rr_ramp[-1]])
+rbp_attrition_pib = jnp.concatenate([rbp_ramp_pib, jnp.ones(SIM_EXTRA) * rbp_ramp_pib[-1]])
 
-# ── Fetch on-chain actuals ──────────────────────────────────────────
+print(f"\nSP Attrition scenario:")
+print(f"  RR:  {rr_val*100:.0f}% -> {rr_val*rr_end_frac*100:.0f}% (linear over {FORECAST_DAYS}d)")
+print(f"  RBP: {rbp_pib_day:.2f} -> {rbp_pib_day*rbp_end_frac:.2f} PiB/d (linear over {FORECAST_DAYS}d)")
+
+# ── Log-linear decline scenario: 3x annual reduction in RBP ────────
+# RBP decays exponentially: rbp(t) = rbp_0 * (1/3)^(t/365)
+# This is log-linear and never hits zero
+rbp_decay_rate = 3.0  # 3x reduction per year
+days_fc = jnp.arange(SIM_FCST)
+rbp_loglin_pib = rbp_pib_day * (1.0 / rbp_decay_rate) ** (days_fc / 365.0)
+rbp_loglin_pib_start = float(rbp_loglin_pib[0])
+rbp_loglin_pib_1y = float(rbp_loglin_pib[364])
+rbp_loglin_pib_2y = float(rbp_loglin_pib[min(729, SIM_FCST-1)])
+
+print(f"\nLog-linear decline scenario (RBP only, RR unchanged):")
+print(f"  RBP: {rbp_loglin_pib_start:.2f} -> {rbp_loglin_pib_1y:.2f} (1Y) -> {rbp_loglin_pib_2y:.2f} (2Y) PiB/d  ({rbp_decay_rate:.0f}x annual reduction)")
+
+SCENARIOS = [
+    {
+        "name": "Baseline",
+        "color": "steelblue",
+        "linestyle": "--",
+        "rbp_pib": jnp.ones(SIM_FCST) * rbp_pib_day,
+        "rr": jnp.ones(SIM_FCST) * rr_val,
+    },
+    {
+        "name": "SP Attrition",
+        "color": "crimson",
+        "linestyle": "--",
+        "rbp_pib": rbp_attrition_pib,
+        "rr": rr_attrition,
+    },
+    {
+        "name": f"RBP {rbp_decay_rate:.0f}x/yr decline",
+        "color": "darkorchid",
+        "linestyle": "--",
+        "rbp_pib": rbp_loglin_pib,
+        "rr": jnp.ones(SIM_FCST) * rr_val,  # RR unchanged
+    },
+]
+
+# ── Run all scenarios ──────────────────────────────────────────────
+for sc in SCENARIOS:
+    print(f"\nRunning simulation [{sc['name']}] ...")
+    t0 = time.time()
+    sc["results"] = sim.run_sim(
+        sc["rbp_pib"], sc["rr"], fpr_vec,
+        LOCK_TARGET, START_DATE, CURRENT_DATE, SIM_FCST, SECTOR_DURATION,
+        sim_data,
+    )
+    print(f"  done ({time.time()-t0:.1f}s)")
+
+# ── Fetch on-chain actuals ─────────────────────────────────────────
 print("Fetching on-chain data ...")
 supply_df = SpacescopeDataConnection.query_spacescope_supply_stats(START_DATE, CURRENT_DATE)
 supply_df = supply_df.sort_values("date")
@@ -124,11 +196,13 @@ print(f"  {len(oc_dates)} days")
 total_days = (END_DATE - START_DATE).days
 t = [START_DATE + timedelta(days=i) for i in range(total_days)]
 split = HISTORY_DAYS
-N = total_days  # display window length; results arrays may be longer due to SIM_EXTRA
+N = total_days
 
 def d(arr):
     """Slice a result array to the display window."""
-    return np.array(arr)[:N]
+    a = np.array(arr)
+    assert len(a) >= N, f"result array too short: {len(a)} < N={N}. Increase SIM_EXTRA."
+    return a[:N]
 
 # ── Build input vectors for plotting ────────────────────────────────
 hist_rbp = np.array(sim_data["historical_onboarded_rb_power_pib"])
@@ -138,126 +212,150 @@ hist_ratio = np.where(hist_rbp > 0, hist_qa / hist_rbp, 1.0)
 hist_fpr = np.clip((hist_ratio - 1.0) / 9.0, 0.0, 1.0)
 
 # ── Shared plot helpers ─────────────────────────────────────────────
-HIST_KW  = dict(color="steelblue", linewidth=1.5, linestyle="-")
-FCST_KW  = dict(color="steelblue", linewidth=2.0, linestyle="--")
+HIST_KW  = dict(color="dimgray", linewidth=1.2, linestyle="-", alpha=0.7)
 OC_KW    = dict(color="black", linewidth=1.5, linestyle="-", alpha=0.7)
 VLINE_KW = dict(color="dimgray", linewidth=0.8, linestyle=":", alpha=0.6)
 INPUT_KW = dict(color="darkorange", linewidth=1.5, linestyle="-")
-INPUT_FCST_KW = dict(color="darkorange", linewidth=2.0, linestyle="--")
 
 def add_vline(ax):
     ax.axvline(CURRENT_DATE, **VLINE_KW)
 
 # ════════════════════════════════════════════════════════════════════
-# FIGURE 1: Forecast Panel
+# FIGURE 1: Scenario Forecast Panel
 # ════════════════════════════════════════════════════════════════════
 fig, axes = plt.subplots(4, 3, figsize=(17, 14), sharex=True)
+sc_labels = ", ".join(s["name"] for s in SCENARIOS)
 fig.suptitle(
-    f"Filecoin 1Y Forecast  |  {CURRENT_DATE}\n"
-    f"Inputs: RBP={rbp_pib_day:.2f} PiB/d,  RR={rr_val*100:.1f}%,  FIL+={fpr_val*100:.1f}%  (30d median, static)",
+    f"Filecoin 2Y Forecast  |  {CURRENT_DATE}\n"
+    f"RBP={rbp_pib_day:.2f} PiB/d,  FIL+={fpr_val*100:.1f}%  (30d median)  |  Scenarios: {sc_labels}",
     fontsize=12, fontweight="bold", y=0.98,
 )
+
+# Helper: plot historical (gray) + per-scenario forecast lines
+def plot_scenarios(ax, key, scale=1.0):
+    """Plot shared history and per-scenario forecast for a result key."""
+    # All scenarios share the same history; use first
+    y0 = d(SCENARIOS[0]["results"][key]) * scale
+    ax.plot(t[:split+1], y0[:split+1], **HIST_KW, label="Historical")
+    for sc in SCENARIOS:
+        y = d(sc["results"][key]) * scale
+        ax.plot(t[split:], y[split:], color=sc["color"], linewidth=2.0,
+                linestyle=sc["linestyle"], label=sc["name"])
 
 # ── Row 0: Inputs ──────────────────────────────────────────────────
 ax = axes[0, 0]
 t_inp = t[:len(hist_rbp)]
 ax.plot(t_inp, hist_rbp, **INPUT_KW, label="Historical")
-ax.plot(t[split:], [rbp_pib_day]*len(t[split:]), **INPUT_FCST_KW, label=f"Forecast ({rbp_pib_day:.2f})")
+for sc in SCENARIOS:
+    rbp_pib_fc = np.array(sc["rbp_pib"][:FORECAST_DAYS])
+    ax.plot(t[split:], rbp_pib_fc, color=sc["color"], linewidth=2.0,
+            linestyle=sc["linestyle"], label=sc["name"])
 add_vline(ax); ax.set_ylabel("PiB/day"); ax.set_title("RB Onboarding Rate", fontsize=10)
-ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 ax = axes[0, 1]
 t_rr = t[:len(hist_rr)]
 ax.plot(t_rr, hist_rr * 100, **INPUT_KW, label="Historical")
-ax.plot(t[split:], [rr_val*100]*len(t[split:]), **INPUT_FCST_KW, label=f"Forecast ({rr_val*100:.1f}%)")
+for sc in SCENARIOS:
+    rr_fc = np.array(sc["rr"][:FORECAST_DAYS]) * 100
+    ax.plot(t[split:], rr_fc, color=sc["color"], linewidth=2.0,
+            linestyle=sc["linestyle"], label=sc["name"])
 add_vline(ax); ax.set_ylabel("%"); ax.set_title("Renewal Rate", fontsize=10)
 ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.set_ylim(0, 100)
 
 ax = axes[0, 2]
 t_fpr = t[:len(hist_fpr)]
 ax.plot(t_fpr, hist_fpr * 100, **INPUT_KW, label="Historical")
-ax.plot(t[split:], [fpr_val*100]*len(t[split:]), **INPUT_FCST_KW, label=f"Forecast ({fpr_val*100:.1f}%)")
+ax.plot(t[split:], [fpr_val*100]*len(t[split:]), color="dimgray", linewidth=2.0,
+        linestyle="--", label=f"Forecast ({fpr_val*100:.1f}%)")
 add_vline(ax); ax.set_ylabel("%"); ax.set_title("FIL+ Rate", fontsize=10)
 ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.set_ylim(0, 100)
 
-# ── Row 1: Power ───────────────────────────────────────────────────
+# ── Row 1: Power + Minting + Pledge/Reward ─────────────────────────
 ax = axes[1, 0]
-y = d(results["rb_total_power_eib"])
-ax.plot(t[:split+1], y[:split+1], **HIST_KW)
-ax.plot(t[split:], y[split:], **FCST_KW)
-add_vline(ax); ax.set_ylabel("EiB"); ax.set_title("Raw Byte Power", fontsize=10)
-ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+# RBP and QAP on same plot (log scale)
+y0_rb = d(SCENARIOS[0]["results"]["rb_total_power_eib"])
+y0_qa = d(SCENARIOS[0]["results"]["qa_total_power_eib"])
+ax.plot(t[:split+1], y0_rb[:split+1], color="dimgray", linewidth=1.2, alpha=0.5, linestyle="-")
+ax.plot(t[:split+1], y0_qa[:split+1], **HIST_KW, label="Historical")
+for sc in SCENARIOS:
+    y_rb = d(sc["results"]["rb_total_power_eib"])
+    y_qa = d(sc["results"]["qa_total_power_eib"])
+    ax.plot(t[split:], y_rb[split:], color=sc["color"], linewidth=1.2,
+            linestyle=":", alpha=0.6)
+    ax.plot(t[split:], y_qa[split:], color=sc["color"], linewidth=2.0,
+            linestyle=sc["linestyle"], label=f"{sc['name']} (QAP)")
+add_vline(ax); ax.set_ylabel("EiB"); ax.set_title("Network Power (RBP thin, QAP bold)", fontsize=10)
+ax.set_yscale("log"); ax.legend(fontsize=7); ax.grid(True, alpha=0.2, which="both")
 
 ax = axes[1, 1]
-y = d(results["qa_total_power_eib"])
-ax.plot(t[:split+1], y[:split+1], **HIST_KW, label="QAP")
-ax.plot(t[split:], y[split:], **FCST_KW)
-baseline = minting.compute_baseline_power_array(
-    np.datetime64(START_DATE), np.datetime64(END_DATE), sim_data["init_baseline_eib"],
-)
-ax.plot(t, np.array(baseline), ":", color="red", linewidth=1, label="Baseline")
-add_vline(ax); ax.set_ylabel("EiB"); ax.set_title("Quality Adj. Power", fontsize=10)
-ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+plot_scenarios(ax, "day_network_reward")
+add_vline(ax); ax.set_ylabel("FIL/day"); ax.set_title("Minting Rate", fontsize=10)
+ax.set_yscale("log"); ax.legend(fontsize=7); ax.grid(True, alpha=0.2, which="both")
 
 ax = axes[1, 2]
-y = d(results["day_network_reward"])
-ax.plot(t[:split+1], y[:split+1], **HIST_KW)
-ax.plot(t[split:], y[split:], **FCST_KW)
-add_vline(ax); ax.set_ylabel("FIL/day"); ax.set_title("Minting Rate", fontsize=10)
-ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+# Pledge/Reward locked ratio
+for sc in SCENARIOS:
+    y_pledge = d(sc["results"]["network_locked_pledge"])
+    y_reward = d(sc["results"]["network_locked_reward"])
+    y_ratio = y_pledge / np.maximum(y_reward, 1e-10)
+    ax.plot(t[1:split+1], y_ratio[1:split+1], **HIST_KW, label="Historical" if sc is SCENARIOS[0] else None)
+    ax.plot(t[split:], y_ratio[split:], color=sc["color"], linewidth=2.0,
+            linestyle=sc["linestyle"], label=sc["name"])
+add_vline(ax); ax.set_ylabel("Ratio"); ax.set_title("Pledge / Reward Locked", fontsize=10)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 # ── Row 2: Supply ──────────────────────────────────────────────────
 ax = axes[2, 0]
-y_total = d(results["network_locked"]) / 1e6
-y_pledge = d(results["network_locked_pledge"]) / 1e6
-y_reward = d(results["network_locked_reward"]) / 1e6
-ax.fill_between(t, y_pledge, y_total, alpha=0.3, color="darkorange", label="Reward-locked")
-ax.fill_between(t, 0, y_pledge, alpha=0.3, color="steelblue", label="Pledge-locked")
-ax.plot(t, y_total, color="steelblue", linewidth=1.2)
-ax.plot(oc_dates, oc_locked / 1e6, **OC_KW, label="On-chain")
-add_vline(ax); ax.set_ylabel("M FIL"); ax.set_title("Network Locked (Pledge + Reward)", fontsize=10)
-ax.legend(fontsize=7, loc="upper right"); ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+plot_scenarios(ax, "network_locked", scale=1e-6)
+add_vline(ax); ax.set_ylabel("M FIL"); ax.set_title("Network Locked", fontsize=10)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 ax = axes[2, 1]
-y = d(results["circ_supply"]) / 1e6
-ax.plot(oc_dates, oc_circ / 1e6, **OC_KW, label="On-chain")
-ax.plot(t[:split+1], y[:split+1], **HIST_KW, label="Sim (hist)")
-ax.plot(t[split:], y[split:], **FCST_KW, label="Forecast")
+plot_scenarios(ax, "circ_supply", scale=1e-6)
 add_vline(ax); ax.set_ylabel("M FIL"); ax.set_title("Circulating Supply", fontsize=10)
-ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 ax = axes[2, 2]
-nl = d(results["network_locked"])
-cs = d(results["circ_supply"])
-ax.plot(t[:split+1], (nl/cs)[:split+1], **HIST_KW)
-ax.plot(t[split:], (nl/cs)[split:], **FCST_KW)
+y0_nl = d(SCENARIOS[0]["results"]["network_locked"])
+y0_cs = d(SCENARIOS[0]["results"]["circ_supply"])
+ax.plot(t[:split+1], (y0_nl/y0_cs)[:split+1], **HIST_KW, label="Historical")
+for sc in SCENARIOS:
+    nl = d(sc["results"]["network_locked"])
+    cs = d(sc["results"]["circ_supply"])
+    ax.plot(t[split:], (nl/cs)[split:], color=sc["color"], linewidth=2.0,
+            linestyle=sc["linestyle"], label=sc["name"])
 add_vline(ax); ax.set_ylabel("Ratio"); ax.set_title("Locked / Circ Supply", fontsize=10)
-ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 # ── Row 3: Economics ───────────────────────────────────────────────
 ax = axes[3, 0]
-y = d(results["day_pledge_per_QAP"])
-ax.plot(t[1:split+1], y[1:split+1], **HIST_KW)
-ax.plot(t[split:], y[split:], **FCST_KW)
+y0 = d(SCENARIOS[0]["results"]["day_pledge_per_QAP"])
+ax.plot(t[1:split+1], y0[1:split+1], **HIST_KW, label="Historical")
+for sc in SCENARIOS:
+    y = d(sc["results"]["day_pledge_per_QAP"])
+    ax.plot(t[split:], y[split:], color=sc["color"], linewidth=2.0,
+            linestyle=sc["linestyle"], label=sc["name"])
 add_vline(ax); ax.set_ylabel("FIL"); ax.set_title("Pledge / 32 GiB QA Sector", fontsize=10)
-ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 ax = axes[3, 1]
-y_roi = np.array(results["1y_sector_roi"]) * 100
-y = y_roi[:N]
-t_roi = t[:len(y)]
-roi_split = min(split, len(y))
-ax.plot(t_roi[:roi_split], y[:roi_split], **HIST_KW)
-ax.plot(t_roi[roi_split-1:], y[roi_split-1:], **FCST_KW)
+for sc in SCENARIOS:
+    y_roi = np.array(sc["results"]["1y_sector_roi"]) * 100
+    y = y_roi[:N]
+    t_roi = t[:len(y)]
+    roi_split = min(split, len(y))
+    if sc is SCENARIOS[0]:
+        ax.plot(t_roi[:roi_split], y[:roi_split], **HIST_KW, label="Historical")
+    ax.plot(t_roi[roi_split-1:], y[roi_split-1:], color=sc["color"], linewidth=2.0,
+            linestyle=sc["linestyle"], label=sc["name"])
 add_vline(ax); ax.set_ylabel("%"); ax.set_title("1Y Realized FoFR", fontsize=10)
-ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 ax = axes[3, 2]
-y = d(results["day_rewards_per_sector"])
-ax.plot(t[:split+1], y[:split+1], **HIST_KW)
-ax.plot(t[split:], y[split:], **FCST_KW)
+plot_scenarios(ax, "day_rewards_per_sector")
 add_vline(ax); ax.set_ylabel("FIL/day"); ax.set_title("Daily Rewards / Sector", fontsize=10)
-ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=7); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 # Format shared x-axis on bottom row only
 for ax in axes[3, :]:
@@ -271,8 +369,82 @@ print(f"\nForecast panel saved -> forecast_panel.png")
 
 
 # ════════════════════════════════════════════════════════════════════
-# FIGURE 2: Before / After Bug Fix Comparison
+# FIGURE 2: Onboarding Required to Offset SP Attrition
 # ════════════════════════════════════════════════════════════════════
+# At steady state, to keep QAP constant:
+#   new_QAP/day = (1 - rr) * QAP / sector_duration
+#   new_RBP/day = new_QAP/day / qa_multiplier
+#
+# qa_multiplier = 1 + 9 * fil_plus_rate  (10x at 100% FIL+)
+
+qa_current_eib = float(np.array(SCENARIOS[0]["results"]["qa_total_power_eib"])[split])
+qa_mult = 1.0 + 9.0 * fpr_val  # effective QA multiplier
+
+rr_range = np.linspace(0, 1, 200)
+# Required onboarding to maintain QAP (PiB/day)
+required_rbp_pib = (1 - rr_range) * qa_current_eib * 1024.0 / (SECTOR_DURATION * qa_mult)
+
+fig3, ax3 = plt.subplots(figsize=(10, 6))
+ax3.plot(rr_range * 100, required_rbp_pib, color="steelblue", linewidth=2.5,
+         label="Required RBP to maintain QAP")
+ax3.axhline(rbp_pib_day, color="darkorange", linewidth=1.5, linestyle="--",
+            label=f"Current onboarding ({rbp_pib_day:.2f} PiB/d)")
+ax3.axvline(rr_val * 100, color="dimgray", linewidth=1, linestyle=":", alpha=0.6)
+
+# Find the breakeven RR (where current onboarding = required)
+rr_breakeven = 1.0 - rbp_pib_day * SECTOR_DURATION * qa_mult / (qa_current_eib * 1024.0)
+rr_breakeven = max(0, min(1, rr_breakeven))
+
+# Mark current operating point and breakeven
+ax3.plot(rr_val * 100, rbp_pib_day, "o", color="darkorange", markersize=12, zorder=5)
+ax3.annotate(
+    f"Current: RR={rr_val*100:.0f}%, RBP={rbp_pib_day:.2f} PiB/d\n"
+    f"Breakeven: RR={rr_breakeven*100:.1f}%  (margin: {(rr_val - rr_breakeven)*100:+.1f}pp)",
+    xy=(rr_val * 100, rbp_pib_day),
+    xytext=(45, rbp_pib_day + 1.2),
+    fontsize=10, color="darkorange", fontweight="bold",
+    arrowprops=dict(arrowstyle="->", color="darkorange", lw=1.5),
+)
+
+# Shade deficit zone (where current onboarding < required)
+deficit_mask = required_rbp_pib > rbp_pib_day
+ax3.fill_between(rr_range[deficit_mask] * 100, rbp_pib_day, required_rbp_pib[deficit_mask],
+                 alpha=0.15, color="crimson", label="Deficit (QAP shrinking)")
+surplus_mask = required_rbp_pib <= rbp_pib_day
+ax3.fill_between(rr_range[surplus_mask] * 100, required_rbp_pib[surplus_mask], rbp_pib_day,
+                 alpha=0.15, color="seagreen", label="Surplus (QAP growing)")
+
+ax3.set_xlabel("Renewal Rate (%)", fontsize=12)
+ax3.set_ylabel("RB Onboarding Required (PiB/day)", fontsize=12)
+ax3.set_title(
+    f"Onboarding Required to Maintain Network QAP ({qa_current_eib:.1f} EiB)\n"
+    f"Sector duration={SECTOR_DURATION}d,  FIL+ multiplier={qa_mult:.1f}x",
+    fontsize=12, fontweight="bold",
+)
+ax3.set_xlim(0, 100)
+ax3.set_ylim(bottom=0)
+ax3.legend(fontsize=9, loc="upper right")
+ax3.grid(True, alpha=0.3)
+
+fig3.tight_layout()
+fig3.savefig("onboarding_required.png", dpi=150, bbox_inches="tight")
+print(f"Onboarding required plot saved -> onboarding_required.png")
+
+
+# ════════════════════════════════════════════════════════════════════
+# FIGURE 3: Before / After Bug Fix Comparison (uses Flat scenario)
+# ════════════════════════════════════════════════════════════════════
+print("Running simulation [old 50/50] ...")
+sim_data_old = {k: v for k, v in sim_data.items() if k != "locked_reward_zero"}
+rbp_flat = jnp.ones(SIM_FCST) * rbp_pib_day
+results_fixed = SCENARIOS[0]["results"]  # Flat scenario
+results_old = sim.run_sim(
+    rbp_flat, rr_vec, fpr_vec,
+    LOCK_TARGET, START_DATE, CURRENT_DATE, SIM_FCST, SECTOR_DURATION,
+    sim_data_old,
+)
+print(f"  done")
+
 fig2, axes2 = plt.subplots(2, 2, figsize=(14, 8))
 fig2.suptitle(
     "Bug Fix: 50/50 Pledge/Reward Split -> Data-Driven Linear Vesting\n"
@@ -285,28 +457,23 @@ NEW_KW  = dict(color="steelblue", linewidth=1.8, linestyle="-",             labe
 
 # Network Locked
 ax = axes2[0, 0]
-y_new = d(results["network_locked"]) / 1e6
+y_new = d(results_fixed["network_locked"]) / 1e6
 y_old = d(results_old["network_locked"]) / 1e6
-y_new_pledge = d(results["network_locked_pledge"]) / 1e6
-y_new_reward = d(results["network_locked_reward"]) / 1e6
+y_new_pledge = d(results_fixed["network_locked_pledge"]) / 1e6
 y_old_pledge = d(results_old["network_locked_pledge"]) / 1e6
-y_old_reward = d(results_old["network_locked_reward"]) / 1e6
-# Fixed: stacked areas
 ax.fill_between(t, y_new_pledge, y_new, alpha=0.2, color="darkorange")
 ax.fill_between(t, 0, y_new_pledge, alpha=0.2, color="steelblue")
 ax.plot(t, y_new, color="steelblue", linewidth=1.5, label="Fixed (total)")
 ax.plot(t, y_new_pledge, color="steelblue", linewidth=0.8, linestyle=":", alpha=0.6, label="Fixed (pledge)")
-# Old 50/50
 ax.plot(t, y_old, color="red", linewidth=1.5, linestyle="--", alpha=0.8, label="Old 50/50 (total)")
 ax.plot(t, y_old_pledge, color="red", linewidth=0.8, linestyle=":", alpha=0.4, label="Old 50/50 (pledge)")
-# On-chain
 ax.plot(oc_dates, oc_locked / 1e6, **OC_KW, label="On-chain")
 add_vline(ax); ax.set_ylabel("M FIL"); ax.set_title("Network Locked (Pledge + Reward)", fontsize=11)
-ax.legend(fontsize=7, loc="upper right"); ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=7, loc="upper right"); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 # Circulating Supply
 ax = axes2[0, 1]
-y_new = d(results["circ_supply"]) / 1e6
+y_new = d(results_fixed["circ_supply"]) / 1e6
 y_old = d(results_old["circ_supply"]) / 1e6
 ax.plot(oc_dates, oc_circ / 1e6, **OC_KW, label="On-chain")
 ax.plot(t[:split+1], y_old[:split+1], color="red", linewidth=1, alpha=0.4, linestyle="--")
@@ -314,11 +481,11 @@ ax.plot(t[split:], y_old[split:], **OLD_KW)
 ax.plot(t[:split+1], y_new[:split+1], color="steelblue", linewidth=1, alpha=0.4)
 ax.plot(t[split:], y_new[split:], **NEW_KW)
 add_vline(ax); ax.set_ylabel("M FIL"); ax.set_title("Circulating Supply", fontsize=11)
-ax.legend(fontsize=8); ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=8); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 # FoFR
 ax = axes2[1, 0]
-y_new_full = np.array(results["1y_sector_roi"]) * 100
+y_new_full = np.array(results_fixed["1y_sector_roi"]) * 100
 y_old_full = np.array(results_old["1y_sector_roi"]) * 100
 disp2 = min(len(y_new_full), total_days)
 y_new_r = y_new_full[:disp2]; y_old_r = y_old_full[:disp2]
@@ -329,7 +496,7 @@ ax.plot(t_roi[roi_split-1:], y_old_r[roi_split-1:], **OLD_KW)
 ax.plot(t_roi[:roi_split], y_new_r[:roi_split], color="steelblue", linewidth=1, alpha=0.4)
 ax.plot(t_roi[roi_split-1:], y_new_r[roi_split-1:], **NEW_KW)
 add_vline(ax); ax.set_ylabel("%"); ax.set_title("1Y Realized FoFR", fontsize=11)
-ax.legend(fontsize=8); ax.grid(True, alpha=0.2); ax.set_ylim(bottom=0)
+ax.legend(fontsize=8); ax.grid(True, alpha=0.2); ax.margins(y=0.05)
 
 # Initialization split (bar chart)
 ax = axes2[1, 1]
@@ -343,7 +510,6 @@ b2 = ax.bar(x + w/2, reward_vals, w, label="Reward-locked", color="darkorange", 
 ax.set_ylabel("M FIL"); ax.set_title("Initial Pledge/Reward Split", fontsize=11)
 ax.set_xticks(x); ax.set_xticklabels(labels, fontsize=9)
 ax.legend(fontsize=8); ax.grid(True, alpha=0.2, axis="y")
-# annotate bars
 for b in b1:
     ax.text(b.get_x() + b.get_width()/2, b.get_height() + 1,
             f"{b.get_height():.1f}M", ha="center", va="bottom", fontsize=8)
@@ -365,22 +531,40 @@ print(f"Bug fix comparison saved -> bugfix_comparison.png")
 print(f"\n{'='*60}")
 print("FORECAST SUMMARY")
 print(f"{'='*60}")
-nl = np.array(results["network_locked"])
-cs = np.array(results["circ_supply"])
-roi = np.array(results["1y_sector_roi"])
-pledge = np.array(results["day_pledge_per_QAP"])
-end_idx = total_days - 1  # display end index (not extended sim end)
 
-nl_old = np.array(results_old["network_locked"])
-cs_old = np.array(results_old["circ_supply"])
+end_idx = total_days - 1
+header_cols = "  ".join(f"{sc['name']:>15s}" for sc in SCENARIOS)
+print(f"\n  {'Metric':<25s} {'At Start':>15s}  {header_cols}")
+print(f"  {'-'*25} {'-'*15}  {'  '.join('-'*15 for _ in SCENARIOS)}")
 
-print(f"\n  {'Metric':<25s} {'Fixed (start)':>15s} {'Fixed (+12mo)':>15s} {'Old 50/50 (+12mo)':>18s}")
-print(f"  {'-'*25} {'-'*15} {'-'*15} {'-'*18}")
-print(f"  {'Network Locked (M)':<25s} {nl[split]/1e6:>15.1f} {nl[end_idx]/1e6:>15.1f} {nl_old[end_idx]/1e6:>18.1f}")
-print(f"  {'Circ Supply (M)':<25s} {cs[split]/1e6:>15.1f} {cs[end_idx]/1e6:>15.1f} {cs_old[end_idx]/1e6:>18.1f}")
-print(f"  {'L/CS Ratio':<25s} {nl[split]/cs[split]:>15.4f} {nl[end_idx]/cs[end_idx]:>15.4f} {nl_old[end_idx]/cs_old[end_idx]:>18.4f}")
-print(f"  {'Pledge/Sector (FIL)':<25s} {pledge[split]:>15.4f} {pledge[end_idx]:>15.4f}")
-if split < len(roi) and len(roi) > 1:
+# Network Locked
+vals = "  ".join(f"{np.array(sc['results']['network_locked'])[end_idx]/1e6:>15.1f}" for sc in SCENARIOS)
+print(f"  {'Network Locked (M)':<25s} {np.array(SCENARIOS[0]['results']['network_locked'])[split]/1e6:>15.1f}  {vals}")
+
+# Circ Supply
+vals = "  ".join(f"{np.array(sc['results']['circ_supply'])[end_idx]/1e6:>15.1f}" for sc in SCENARIOS)
+print(f"  {'Circ Supply (M)':<25s} {np.array(SCENARIOS[0]['results']['circ_supply'])[split]/1e6:>15.1f}  {vals}")
+
+# L/CS
+def lcs(sc, idx):
+    nl = float(np.array(sc['results']['network_locked'])[idx])
+    cs = float(np.array(sc['results']['circ_supply'])[idx])
+    return nl / cs
+vals = "  ".join(f"{lcs(sc, end_idx):>15.4f}" for sc in SCENARIOS)
+print(f"  {'L/CS Ratio':<25s} {lcs(SCENARIOS[0], split):>15.4f}  {vals}")
+
+# Pledge/Sector
+vals = "  ".join(f"{float(np.array(sc['results']['day_pledge_per_QAP'])[end_idx]):>15.4f}" for sc in SCENARIOS)
+print(f"  {'Pledge/Sector (FIL)':<25s} {float(np.array(SCENARIOS[0]['results']['day_pledge_per_QAP'])[split]):>15.4f}  {vals}")
+
+# FoFR
+roi_vals = []
+for sc in SCENARIOS:
+    roi = np.array(sc["results"]["1y_sector_roi"])
     roi_end = min(end_idx, len(roi) - 1)
-    print(f"  {'1Y FoFR (%)':<25s} {roi[min(split, len(roi)-1)]*100:>15.2f} {roi[roi_end]*100:>15.2f}")
+    roi_vals.append(f"{roi[roi_end]*100:>15.2f}")
+vals = "  ".join(roi_vals)
+roi0 = np.array(SCENARIOS[0]["results"]["1y_sector_roi"])
+print(f"  {'1Y FoFR (%)':<25s} {roi0[min(split, len(roi0)-1)]*100:>15.2f}  {vals}")
+
 plt.show()
