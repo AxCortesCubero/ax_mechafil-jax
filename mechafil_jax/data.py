@@ -1,9 +1,40 @@
-from datetime import date
+from datetime import date, timedelta
+import numpy as np
 import pystarboard.data as data
+from pystarboard.data_spacescope import SpacescopeDataConnection
 
 import mechafil_jax.constants as C
 
-def get_simulation_data(bearer_token_or_auth_file:str, 
+
+def estimate_locked_reward(start_date: date, lookback: int = 180) -> float:
+    """Estimate network_locked_reward at start_date using true linear vesting.
+
+    Each day, 75% of block rewards are locked and vest linearly over 180 days.
+    We look back ``lookback`` days (default 180) and sum the remaining locked
+    portion of each day's reward::
+
+        locked = sum(0.75 * reward[d] * (180 - days_ago) / 180)
+
+    Requires that ``data.setup_spacescope()`` has already been called.
+    """
+    fetch_start = start_date - timedelta(days=lookback + 5)  # small buffer
+    stats_df = SpacescopeDataConnection.query_spacescope_supply_stats(
+        fetch_start, start_date,
+    )
+    stats_df = stats_df.sort_values("date")
+    daily_rewards = np.diff(stats_df["mined_fil"].astype(float).values)
+
+    n = min(len(daily_rewards), 180)
+    recent = daily_rewards[-n:]  # oldest first
+    locked = 0.0
+    for i, dr in enumerate(recent):
+        days_ago = n - 1 - i  # 0 = most recent, n-1 = oldest
+        remaining = (180 - days_ago) / 180.0
+        locked += 0.75 * dr * remaining
+    return max(float(locked), 0.0)
+
+
+def get_simulation_data(bearer_token_or_auth_file:str,
                         start_date:date, current_date:date, end_date:date):
     # setup data access
     data.setup_spacescope(bearer_token_or_auth_file)
@@ -32,6 +63,10 @@ def get_simulation_data(bearer_token_or_auth_file:str,
     burnt_fil_vec = fil_stats_df["burnt_fil"].values
     historical_renewal_rate = fil_stats_df["rb_renewal_rate"].values[:-1]
 
+    # Estimate reward-locked FIL at start_date using true linear vesting.
+    # setup_spacescope() has already been called above.
+    locked_reward_zero = estimate_locked_reward(start_date)
+
     data_dict = {
         "rb_power_zero": rb_power_zero,
         "qa_power_zero": qa_power_zero,
@@ -56,6 +91,7 @@ def get_simulation_data(bearer_token_or_auth_file:str,
         "daily_burnt_fil": daily_burnt_fil,
         "burnt_fil_vec": burnt_fil_vec,
         "historical_renewal_rate": historical_renewal_rate,
+        "locked_reward_zero": locked_reward_zero,
     }
 
     return data_dict
