@@ -124,29 +124,44 @@ fpr_vec = jnp.ones(SIM_FCST) * fpr_val
 # ════════════════════════════════════════════════════════════════════
 # SCENARIOS
 # ════════════════════════════════════════════════════════════════════
-# ── Decline scenario: RBP decays exponentially + RR declines linearly ──
-# Combines declining new entrants with declining renewals
-rbp_decay_rate = 3.0  # 3x reduction per year
-rr_end_frac    = 0.50 # RR drops to 50% of current
+# Both scenarios share declining RBP (observed 3x/yr trend).
+# Both use concave (sqrt) RR decline — front-loaded, marginal SPs exit first.
+# Status Quo = mild RR erosion (to 75%); Decline = aggressive RR erosion (to 50%).
+rbp_decay_rate  = 3.0  # 3x reduction per year (observed historical trend)
+sq_rr_end_frac  = 0.75 # Status Quo: RR declines to 75% of current
+dc_rr_end_frac  = 0.50 # Decline: RR drops to 50% of current
 
 days_fc = jnp.arange(SIM_FCST)
 rbp_decline_pib = rbp_pib_day * (1.0 / rbp_decay_rate) ** (days_fc / 365.0)
-rr_ramp = jnp.linspace(rr_val, rr_val * rr_end_frac, FORECAST_DAYS)
-rr_decline = jnp.concatenate([rr_ramp, jnp.ones(SIM_EXTRA) * rr_ramp[-1]])
+t_norm = jnp.linspace(0, 1, FORECAST_DAYS)
+
+# Status Quo: mild concave decline
+rr_sq = rr_val * (1.0 - (1.0 - sq_rr_end_frac) * jnp.sqrt(t_norm))
+rr_status_quo = jnp.concatenate([rr_sq, jnp.ones(SIM_EXTRA) * rr_sq[-1]])
+
+# Decline: aggressive concave decline
+rr_dc = rr_val * (1.0 - (1.0 - dc_rr_end_frac) * jnp.sqrt(t_norm))
+rr_decline = jnp.concatenate([rr_dc, jnp.ones(SIM_EXTRA) * rr_dc[-1]])
 
 rbp_1y = float(rbp_decline_pib[364])
 rbp_2y = float(rbp_decline_pib[min(729, SIM_FCST-1)])
-print(f"\nDecline scenario:")
-print(f"  RBP: {rbp_pib_day:.2f} -> {rbp_1y:.2f} (1Y) -> {rbp_2y:.2f} (2Y) PiB/d  ({rbp_decay_rate:.0f}x/yr exponential decay)")
-print(f"  RR:  {rr_val*100:.0f}% -> {rr_val*rr_end_frac*100:.0f}% (linear over {FORECAST_DAYS}d)")
+sq_rr_1y = float(rr_sq[364])
+sq_rr_2y = float(rr_sq[-1])
+dc_rr_1y = float(rr_dc[364])
+dc_rr_2y = float(rr_dc[-1])
+print(f"\nShared RBP trajectory ({rbp_decay_rate:.0f}x/yr exponential decay):")
+print(f"  RBP: {rbp_pib_day:.2f} -> {rbp_1y:.2f} (1Y) -> {rbp_2y:.2f} (2Y) PiB/d")
+print(f"\nScenarios:")
+print(f"  Status Quo: RR {rr_val*100:.0f}% -> {sq_rr_1y*100:.0f}% (1Y) -> {sq_rr_2y*100:.0f}% (2Y) [concave, mild]")
+print(f"  Decline:    RR {rr_val*100:.0f}% -> {dc_rr_1y*100:.0f}% (1Y) -> {dc_rr_2y*100:.0f}% (2Y) [concave, aggressive]")
 
 SCENARIOS = [
     {
         "name": "Status Quo",
         "color": "steelblue",
         "linestyle": "--",
-        "rbp_pib": jnp.ones(SIM_FCST) * rbp_pib_day,
-        "rr": jnp.ones(SIM_FCST) * rr_val,
+        "rbp_pib": rbp_decline_pib,
+        "rr": rr_status_quo,
     },
     {
         "name": "Decline",
