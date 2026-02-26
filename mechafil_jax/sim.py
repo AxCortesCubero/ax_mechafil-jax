@@ -41,11 +41,11 @@ def run_sim(
     Parameters:
     -----------
     rb_onboard_power: jnp.array
-        The raw power onboarded to the network, in EiB.
+        The raw power onboarded to the network, in PiB.
     renewal_rate: jnp.array
-        The renewal rate of the network, in EiB/day.
+        The fraction of scheduled-to-expire sectors that are renewed each day (dimensionless, 0.0-1.0).
     fil_plus_rate: jnp.array
-        The FIL+ rate of the network, in EiB/day.
+        The fraction of daily onboarded power that is FIL+ verified (dimensionless, 0.0-1.0).
     lock_target: Union[float, jnp.array]
         The target lock ratio of the network. If a float, then the lock target is constant across the simulation. If it is
         a jnp.array, then it must be of length `forecast_length` and the lock target can be time-varying.  This applies to the
@@ -88,6 +88,7 @@ def run_sim(
     init_baseline_eib = data["init_baseline_eib"]
     circ_supply_zero = data["circ_supply_zero"]
     locked_fil_zero = data["locked_fil_zero"]
+    locked_reward_zero = data.get("locked_reward_zero", None)
     daily_burnt_fil = data["daily_burnt_fil"]
     burnt_fil_vec = data["burnt_fil_vec"]
     historical_renewal_rate = data["historical_renewal_rate"]
@@ -169,6 +170,7 @@ def run_sim(
         lock_target=full_lock_target_vec,
         gamma=full_gamma_vec,
         use_available_supply=use_available_supply,
+        locked_reward_zero=locked_reward_zero,
     )
 
     # collate results
