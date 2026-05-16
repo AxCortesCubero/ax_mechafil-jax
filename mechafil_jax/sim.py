@@ -160,7 +160,7 @@ def run_sim(
         np.datetime64(end_date),
         circ_supply_zero,
         locked_fil_zero,
-        daily_burnt_fil*burn_boost,
+        daily_burnt_fil * burn_boost,
         duration,
         full_renewal_rate_vec,
         burnt_fil_vec,
