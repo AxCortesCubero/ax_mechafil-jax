@@ -33,7 +33,6 @@ def run_sim(
     baseline_function_EIB: jnp.array = None,
     fil_plus_m: Union[float, jnp.array] = 10.0,
     qa_renew_relative_multiplier_vec: jnp.array = 1.0,
-    burn_boost:jnp.array,
     use_available_supply: bool = False,
 ):
     """
